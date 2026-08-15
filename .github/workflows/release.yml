@@ -5,18 +5,16 @@
 #  A) Push a tag from terminal:
 #       git tag v1.2.3 && git push origin v1.2.3
 #
-#  B) GitHub UI → Actions → Build & Release TypeFlow → Run workflow
-#       → type  1.2.3  in the version box → click Run workflow
+#  B) GitHub UI → Actions → Build & Release Textiva → Run workflow
+#       → type  1.2.3  in the version box → Run workflow
 
-name: Build & Release TypeFlow
+name: Build & Release Textiva
 
 on:
-  # ── Trigger A: git push tag ────────────────────────────────────────
   push:
     tags:
       - "v*.*.*"
 
-  # ── Trigger B: manual run from GitHub Actions UI ───────────────────
   workflow_dispatch:
     inputs:
       version:
@@ -57,51 +55,47 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build installer & publish release
+    name: Build Textiva installer & publish release
     runs-on: windows-latest
 
     steps:
       # ────────────────────────────────────────────────────────────────
-      # 1.  Checkout full history
+      # 1.  Checkout
       # ────────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use a PAT if you need the pushed tag to re-trigger other workflows,
-          # otherwise the default token is fine for creating releases.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # ────────────────────────────────────────────────────────────────
-      # 2.  Resolve version + tag  (works for BOTH trigger types)
+      # 2.  Resolve version + tag
       # ────────────────────────────────────────────────────────────────
       - name: Resolve version and tag name
         id: version
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual run — version comes from the input box
             VER="${{ github.event.inputs.version }}"
-            # Strip accidental leading "v" if the user typed it
             VER="${VER#v}"
             RAW="v${VER}"
           else
-            # Tag push — derive from the ref
             RAW="${GITHUB_REF#refs/tags/}"
             VER="${RAW#v}"
           fi
 
           echo "raw=$RAW" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
-          echo "trigger=${{ github.event_name }}" >> "$GITHUB_OUTPUT"
+
           echo "──────────────────────────────────"
-          echo "  Trigger  : ${{ github.event_name }}"
-          echo "  Tag      : $RAW"
-          echo "  Version  : $VER"
+          echo "  App     : Textiva"
+          echo "  Trigger : ${{ github.event_name }}"
+          echo "  Tag     : $RAW"
+          echo "  Version : $VER"
           echo "──────────────────────────────────"
 
       # ────────────────────────────────────────────────────────────────
-      # 3.  (Manual only) Create + push the git tag if requested
+      # 3.  (Manual only) Create + push git tag
       # ────────────────────────────────────────────────────────────────
       - name: Create and push git tag
         if: |
@@ -110,20 +104,18 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.version.outputs.raw }}"
-
-          # Check if tag already exists remotely
           if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            echo "Tag $TAG already exists on remote — skipping tag creation"
+            echo "⚠️  Tag $TAG already exists — skipping"
           else
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag "$TAG"
             git push origin "$TAG"
-            echo "Created and pushed tag $TAG"
+            echo "✅ Created and pushed tag $TAG"
           fi
 
       # ────────────────────────────────────────────────────────────────
-      # 4.  Write version.txt so PyInstaller picks it up
+      # 4.  Write version.txt
       # ────────────────────────────────────────────────────────────────
       - name: Write version.txt
         shell: bash
@@ -153,15 +145,15 @@ jobs:
       # ────────────────────────────────────────────────────────────────
       # 7.  Build Textiva.exe with PyInstaller
       # ────────────────────────────────────────────────────────────────
-      - name: Build exe with PyInstaller
+      - name: Build Textiva.exe with PyInstaller
         shell: bash
         run: pyinstaller textiva.spec
 
-      - name: Verify exe was produced
+      - name: Verify Textiva.exe was produced
         shell: bash
         run: |
           ls -lh dist/Textiva.exe
-          echo "Textiva.exe ready"
+          echo "✅ Textiva.exe ready"
 
       # ────────────────────────────────────────────────────────────────
       # 8.  Install Inno Setup 6
@@ -169,55 +161,72 @@ jobs:
       - name: Install Inno Setup 6
         shell: powershell
         run: |
-          $url  = "https://jrsoftware.org/download.php/is.exe"
-          $dest = "$env:TEMP\innosetup.exe"
+          $url  = "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
+          $dest = "$env:RUNNER_TEMP\innosetup.exe"
 
           Write-Host "Downloading Inno Setup..."
-          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          $wc = New-Object System.Net.WebClient
+          $wc.DownloadFile($url, $dest)
 
-          Write-Host "Installing Inno Setup silently..."
-          Start-Process -FilePath $dest `
-            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-" `
-            -Wait -NoNewWindow
-
-          $isccPath = "C:\Program Files (x86)\Inno Setup 6"
-          if (Test-Path $isccPath) {
-            Write-Host "Inno Setup installed at $isccPath"
-            Add-Content -Path $env:GITHUB_PATH -Value $isccPath
-          } else {
-            Write-Error "Inno Setup installation failed"
+          # Verify valid PE executable (magic bytes: MZ)
+          $bytes = [System.IO.File]::ReadAllBytes($dest)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            Write-Error "❌ Downloaded file is not a valid executable"
             exit 1
           }
 
+          $sizeMB = [math]::Round((Get-Item $dest).Length / 1MB, 2)
+          Write-Host "✅ Downloaded $sizeMB MB — file is valid"
+
+          Write-Host "Installing Inno Setup silently..."
+          $proc = Start-Process `
+            -FilePath $dest `
+            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-" `
+            -Wait -NoNewWindow -PassThru
+
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "❌ Installer exited with code $($proc.ExitCode)"
+            exit $proc.ExitCode
+          }
+
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6"
+          if (-not (Test-Path "$isccPath\ISCC.exe")) {
+            Write-Error "❌ ISCC.exe not found after install"
+            exit 1
+          }
+
+          Write-Host "✅ ISCC.exe ready at $isccPath"
+          Add-Content -Path $env:GITHUB_PATH -Value $isccPath
+
       # ────────────────────────────────────────────────────────────────
-      # 9.  Build Windows installer
+      # 9.  Build Textiva Windows installer
       # ────────────────────────────────────────────────────────────────
       - name: Create installer output directory
         shell: bash
         run: mkdir -p installer/output
 
-      - name: Build installer with Inno Setup
+      - name: Build Textiva installer with Inno Setup
         shell: powershell
         run: |
           $ver  = "${{ steps.version.outputs.ver }}"
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
-          Write-Host "Building installer for version $ver ..."
+          Write-Host "Building Textiva installer for version $ver ..."
           & $iscc /DMyAppVersion=$ver installer\textiva.iss
 
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Inno Setup build failed (exit $LASTEXITCODE)"
+            Write-Error "❌ Inno Setup build failed (exit $LASTEXITCODE)"
             exit $LASTEXITCODE
           }
 
-      - name: Verify installer was produced
+      - name: Verify Textiva installer was produced
         shell: bash
         run: |
           ls -lh installer/output/
-          echo "Installer ready"
+          echo "✅ Textiva installer ready"
 
       # ────────────────────────────────────────────────────────────────
-      # 10.  Generate changelog from commits since last tag
+      # 10.  Generate changelog
       # ────────────────────────────────────────────────────────────────
       - name: Generate changelog
         shell: bash
@@ -225,34 +234,32 @@ jobs:
           RAW="${{ steps.version.outputs.raw }}"
           VER="${{ steps.version.outputs.ver }}"
 
-          # Find the previous tag (exclude the current one)
           PREV=$(git tag --sort=-creatordate \
                  | grep -v "^${RAW}$" \
                  | head -n 1 || echo "")
 
           if [ -z "$PREV" ]; then
             RANGE="HEAD"
-            HEADER="## Initial Release — Textiva ${VER}"
+            HEADER="## 🎉 Initial Release — Textiva ${VER}"
           else
             RANGE="${PREV}..HEAD"
-            HEADER="## What changed since ${PREV}"
+            HEADER="## 📋 What changed since ${PREV}"
           fi
 
           {
             echo "$HEADER"
             echo ""
 
-            # Categorise commits by conventional-commit prefix
             FEAT=$(git log $RANGE  --pretty=format:"%s (%h)" --no-merges \
-                   | grep -i "^feat"  | sed 's/^/- /' || true)
+                   | grep -i "^feat"      | sed 's/^/- /' || true)
             FIX=$(git log $RANGE   --pretty=format:"%s (%h)" --no-merges \
-                   | grep -i "^fix"   | sed 's/^/- /' || true)
+                   | grep -i "^fix"       | sed 's/^/- /' || true)
             CHORE=$(git log $RANGE --pretty=format:"%s (%h)" --no-merges \
                    | grep -iEv "^feat|^fix" | sed 's/^/- /' || true)
 
-            [ -n "$FEAT"  ] && echo "### New Features"  && echo "$FEAT"  && echo ""
-            [ -n "$FIX"   ] && echo "### Bug Fixes"     && echo "$FIX"   && echo ""
-            [ -n "$CHORE" ] && echo "### Other Changes" && echo "$CHORE" && echo ""
+            [ -n "$FEAT"  ] && echo "### ✨ New Features"  && echo "$FEAT"  && echo ""
+            [ -n "$FIX"   ] && echo "### 🐛 Bug Fixes"     && echo "$FIX"   && echo ""
+            [ -n "$CHORE" ] && echo "### 🔧 Other Changes" && echo "$CHORE" && echo ""
 
             echo "---"
             echo ""
@@ -266,17 +273,13 @@ jobs:
             if [ -n "$PREV" ]; then
               echo "**Full diff:** https://github.com/${{ github.repository }}/compare/${PREV}...${RAW}"
             fi
-
           } > CHANGELOG_RELEASE.md
 
-          echo "── Changelog preview ──────────────────"
+          echo "── Changelog preview ──"
           cat CHANGELOG_RELEASE.md
-          echo "────────────────────────────────────────"
 
       # ────────────────────────────────────────────────────────────────
       # 11.  Resolve draft / prerelease flags
-      #       For tag-push trigger the flags are always false.
-      #       For manual trigger they come from the input dropdowns.
       # ────────────────────────────────────────────────────────────────
       - name: Resolve release flags
         id: flags
@@ -293,14 +296,14 @@ jobs:
       # ────────────────────────────────────────────────────────────────
       # 12.  Publish GitHub Release
       # ────────────────────────────────────────────────────────────────
-      - name: Publish GitHub Release
+      - name: Publish Textiva GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name:               ${{ steps.version.outputs.raw }}
-          name:                   "Textiva ${{ steps.version.outputs.ver }}"
-          body_path:              CHANGELOG_RELEASE.md
-          draft:                  ${{ steps.flags.outputs.draft }}
-          prerelease:             ${{ steps.flags.outputs.prerelease }}
+          tag_name:                ${{ steps.version.outputs.raw }}
+          name:                    "Textiva ${{ steps.version.outputs.ver }}"
+          body_path:               CHANGELOG_RELEASE.md
+          draft:                   ${{ steps.flags.outputs.draft }}
+          prerelease:              ${{ steps.flags.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: |
             dist/Textiva.exe
@@ -309,7 +312,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ────────────────────────────────────────────────────────────────
-      # 13.  Print summary to the Actions run page
+      # 13.  Job summary
       # ────────────────────────────────────────────────────────────────
       - name: Write job summary
         shell: bash
@@ -319,20 +322,21 @@ jobs:
           REPO="${{ github.repository }}"
 
           cat >> "$GITHUB_STEP_SUMMARY" << EOF
-          ## Textiva ${VER} released successfully
+          ## ✅ Textiva ${VER} released successfully
 
           | | |
           |---|---|
-          | **Version** | \`${VER}\` |
-          | **Tag**     | \`${RAW}\` |
-          | **Trigger** | \`${{ github.event_name }}\` |
-          | **Draft**   | \`${{ steps.flags.outputs.draft }}\` |
+          | **App**         | Textiva |
+          | **Version**     | \`${VER}\` |
+          | **Tag**         | \`${RAW}\` |
+          | **Trigger**     | \`${{ github.event_name }}\` |
+          | **Draft**       | \`${{ steps.flags.outputs.draft }}\` |
           | **Pre-release** | \`${{ steps.flags.outputs.prerelease }}\` |
 
           ### 📦 Artifacts
           - [\`Textiva-Setup-${VER}.exe\`](https://github.com/${REPO}/releases/tag/${RAW}) — Windows installer
           - [\`Textiva.exe\`](https://github.com/${REPO}/releases/tag/${RAW}) — Portable exe
 
-          ### Release page
+          ### 🔗 Release page
           https://github.com/${REPO}/releases/tag/${RAW}
           EOF
