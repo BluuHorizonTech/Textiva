@@ -27,13 +27,34 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # ── SAFE to exclude ────────────────────────────────────────────
+        # These are never touched by PyInstaller internals or your app
         "unittest",
-        "email",
-        "html",
-        "http",
-        "urllib",
-        "xml",
         "pydoc",
+        "doctest",
+        "pdb",
+        "difflib",
+        "ftplib",
+        "imaplib",
+        "poplib",
+        "smtplib",
+        "telnetlib",
+        "xmlrpc",
+        "tkinter.test",
+        "lib2to3",
+        "turtledemo",
+        "turtle",
+        "idlelib",
+        "antigravity",
+        "cgi",
+        "cgitb",
+
+        # ── DO NOT exclude these ────────────────────────────────────────
+        # "urllib"   <- PyInstaller runtime hooks need this via zipfile/pathlib
+        # "email"    <- required by several stdlib modules internally
+        # "html"     <- required by http and others
+        # "http"     <- required internally
+        # "xml"      <- required internally by several hooks
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -50,11 +71,11 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Textiva",                     # FIXED: was "textiva" — must match MyAppExeName in .iss
+    name="Textiva",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,                           # compress the exe (smaller download)
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,                      # no black console window
@@ -63,5 +84,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=None,
-    icon="Textiva.ico",                 # place Textiva.ico in repo root
+    icon="Textiva.ico",
 )
