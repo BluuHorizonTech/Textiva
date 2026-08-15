@@ -1,5 +1,5 @@
-; typeflow.iss
-; Inno Setup 6+ script — produces TypeFlow-Setup-x.x.x.exe
+; installer/textiva.iss
+; Inno Setup 6+ script — produces Textiva-Setup-x.x.x.exe
 ; Docs: https://jrsoftware.org/ishelp/
 
 #define MyAppName      "Textiva"
@@ -23,8 +23,8 @@ AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
 
 ; Output
-OutputDir=installer\output
-OutputBaseFilename=TypeFlow-Setup-{#MyAppVersion}
+OutputDir=output
+OutputBaseFilename=Textiva-Setup-{#MyAppVersion}
 
 ; Install location
 DefaultDirName={autopf}\{#MyAppName}
@@ -52,29 +52,30 @@ MinVersion=10.0
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-; Desktop shortcut — ticked by default
+; Desktop shortcut — unticked by default
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
       GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 ; Windows startup (silent background hook)
-Name: "startup"; Description: "Start TypeFlow automatically when Windows starts"; \
+Name: "startup"; Description: "Start Textiva automatically when Windows starts"; \
       GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
 ; The compiled exe from PyInstaller
-Source: "..\dist\TypeFlow.exe"; DestDir: "{app}"; Flags: ignoreversion
+; ".." resolves to the repo root since this file lives in installer/
+Source: "..\dist\Textiva.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start Menu shortcut
-Name: "{group}\{#MyAppName}";       Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall TypeFlow"; Filename: "{uninstallexe}"
+Name: "{group}\{#MyAppName}";        Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\Uninstall Textiva";   Filename: "{uninstallexe}"
 
 ; Desktop shortcut (only if task selected)
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\{#MyAppExeName}"; \
       Tasks: desktopicon
 
 [Registry]
-; Windows startup (only if task selected)
+; Windows startup entry (only if task selected)
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
       ValueType: string; ValueName: "{#MyAppName}"; \
       ValueData: """{app}\{#MyAppExeName}"" --no-gui"; \
@@ -86,6 +87,6 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
           Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Kill any running TypeFlow process before uninstall
+; Kill any running Textiva process before uninstall
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; \
-          Flags: runhidden; RunOnceId: "KillTypeFlow"
+          Flags: runhidden; RunOnceId: "KillTextiva"

@@ -1,5 +1,5 @@
 # textiva.spec
-# PyInstaller build specification for textiva
+# PyInstaller build specification for Textiva
 # Run manually:  pyinstaller textiva.spec
 
 import os
@@ -50,7 +50,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="textiva",
+    name="Textiva",                     # FIXED: was "textiva" — must match MyAppExeName in .iss
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -62,7 +62,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # version info shown in Windows Explorer → Properties
     version=None,
-    icon="Textiva.ico",                          # add "icon.ico" here if you have one
+    icon="Textiva.ico",                 # place Textiva.ico in repo root
 )

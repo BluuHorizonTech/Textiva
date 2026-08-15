@@ -161,32 +161,12 @@ jobs:
       - name: Install Inno Setup 6
         shell: powershell
         run: |
-          $url  = "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
-          $dest = "$env:RUNNER_TEMP\innosetup.exe"
+          Write-Host "Installing Inno Setup via Chocolatey..."
+          choco install innosetup --yes --no-progress
 
-          Write-Host "Downloading Inno Setup from $url ..."
-          $wc = New-Object System.Net.WebClient
-          $wc.DownloadFile($url, $dest)
-
-          # Verify valid PE executable (magic bytes: MZ = 0x4D 0x5A)
-          $bytes = [System.IO.File]::ReadAllBytes($dest)
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
-            Write-Error "FAILED: Downloaded file is not a valid executable (bad magic bytes)"
-            exit 1
-          }
-
-          $sizeMB = [math]::Round((Get-Item $dest).Length / 1MB, 2)
-          Write-Host "OK: Downloaded $sizeMB MB - file is valid"
-
-          Write-Host "Installing Inno Setup silently..."
-          $proc = Start-Process `
-            -FilePath $dest `
-            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-" `
-            -Wait -NoNewWindow -PassThru
-
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "FAILED: Installer exited with code $($proc.ExitCode)"
-            exit $proc.ExitCode
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAILED: choco install exited with code $LASTEXITCODE"
+            exit $LASTEXITCODE
           }
 
           $isccPath = "C:\Program Files (x86)\Inno Setup 6"
@@ -253,9 +233,9 @@ jobs:
             echo ""
 
             FEAT=$(git log $RANGE  --pretty=format:"%s (%h)" --no-merges \
-                   | grep -i "^feat"      | sed 's/^/- /' || true)
+                   | grep -i "^feat"       | sed 's/^/- /' || true)
             FIX=$(git log $RANGE   --pretty=format:"%s (%h)" --no-merges \
-                   | grep -i "^fix"       | sed 's/^/- /' || true)
+                   | grep -i "^fix"        | sed 's/^/- /' || true)
             CHORE=$(git log $RANGE --pretty=format:"%s (%h)" --no-merges \
                    | grep -iEv "^feat|^fix" | sed 's/^/- /' || true)
 
