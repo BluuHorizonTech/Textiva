@@ -1,4 +1,4 @@
-# TypeFlow
+# Textiva
 
 > **Type less. Say more.**
 
@@ -60,9 +60,60 @@ Remove it with:
 python text_expander.py --uninstall-startup
 ```
 
-## Like TypeFlow?
+```bash
+# Install the only dependency
+pip install keyboard
 
-If TypeFlow saves you a few keystrokes (or a few headaches 😄), you can buy me a coffee:
+# Run as Administrator (right-click → Run as admin)
+python text_expander.py
+
+# Install to startup (auto-runs hidden on every login)
+python text_expander.py --install-startup
+
+# Remove from startup
+python text_expander.py --uninstall-startup
+```
+
+## For Developers
+
+### Requirements
+```bash
+pip install keyboard pyinstaller
+```
+
+### Run from source
+```bash
+python main.py
+```
+
+### Build exe manually
+```bash
+pyinstaller typeflow.spec
+```
+
+### Release a new version
+```bash
+# 1. Bump version
+echo "1.2.3" > version.txt
+git add version.txt
+git commit -m "chore: bump version to 1.2.3"
+
+# 2. Tag it — this triggers the pipeline automatically
+git tag v1.2.3
+git push origin main --tags
+```
+
+The GitHub Actions pipeline will automatically:
+- Build `TypeFlow.exe`
+- Build `TypeFlow-Setup-1.2.3.exe`  
+- Create a GitHub Release with both files attached
+- Generate a changelog from your commit messages
+
+---
+
+## Like Textiva?
+
+If Textiva saves you a few keystrokes (or a few headaches 😄), you can buy me a coffee:
 
 <p align="center">
 

@@ -1,0 +1,163 @@
+# .github/workflows/release.yml
+#
+# TRIGGER:  push a tag like   v1.2.3
+#           git tag v1.2.3 && git push origin v1.2.3
+#
+# WHAT IT DOES:
+#   1. Reads version from the tag
+#   2. Builds TypeFlow.exe with PyInstaller  (Windows runner)
+#   3. Builds TypeFlow-Setup-x.x.x.exe with Inno Setup
+#   4. Creates a GitHub Release with both files attached
+#   5. Generates a changelog from commits since last tag
+
+name: Build & Release TypeFlow
+
+on:
+  push:
+    tags:
+      - "v*.*.*"           # fires on  v1.0.0  v2.3.1  etc.
+
+permissions:
+  contents: write          # needed to create GitHub Releases
+
+jobs:
+  build-and-release:
+    name: Build installer & publish release
+    runs-on: windows-latest   # MUST be Windows — PyInstaller + Inno Setup
+
+    steps:
+      # ────────────────────────────────────────────────────────────────
+      # 1.  Checkout
+      # ────────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history needed for changelog generation
+
+      # ────────────────────────────────────────────────────────────────
+      # 2.  Parse version from the git tag  (strips the leading "v")
+      # ────────────────────────────────────────────────────────────────
+      - name: Parse version from tag
+        id: version
+        shell: bash
+        run: |
+          RAW="${GITHUB_REF#refs/tags/}"   # e.g.  v1.2.3
+          VER="${RAW#v}"                   # e.g.  1.2.3
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "Version → $VER"
+
+      # ────────────────────────────────────────────────────────────────
+      # 3.  Write version into version.txt so PyInstaller picks it up
+      # ────────────────────────────────────────────────────────────────
+      - name: Write version.txt
+        shell: bash
+        run: echo "${{ steps.version.outputs.ver }}" > version.txt
+
+      # ────────────────────────────────────────────────────────────────
+      # 4.  Set up Python
+      # ────────────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ────────────────────────────────────────────────────────────────
+      # 5.  Install dependencies
+      # ────────────────────────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install keyboard pyinstaller
+
+      # ────────────────────────────────────────────────────────────────
+      # 6.  Build Textiva.exe with PyInstaller
+      # ────────────────────────────────────────────────────────────────
+      - name: Build exe with PyInstaller
+        run: pyinstaller textiva.spec
+
+      # Sanity-check the exe was actually produced
+      - name: Verify exe exists
+        shell: bash
+        run: |
+          ls -lh dist/Textiva.exe
+          echo "✅ Textiva.exe built successfully"
+
+      # ────────────────────────────────────────────────────────────────
+      # 7.  Install Inno Setup 6
+      # ────────────────────────────────────────────────────────────────
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $url  = "https://jrsoftware.org/download.php/is.exe"
+          $dest = "$env:TEMP\innosetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $dest
+          Start-Process $dest -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      # ────────────────────────────────────────────────────────────────
+      # 8.  Build the Windows installer
+      # ────────────────────────────────────────────────────────────────
+      - name: Build installer with Inno Setup
+        shell: cmd
+        run: |
+          mkdir installer\output
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" ^
+            /DMyAppVersion=${{ steps.version.outputs.ver }} ^
+            installer\textiva.iss
+
+      # Sanity-check the installer was produced
+      - name: Verify installer exists
+        shell: bash
+        run: |
+          ls -lh installer/output/
+          echo "✅ Installer built successfully"
+
+      # ────────────────────────────────────────────────────────────────
+      # 9.  Generate changelog from git log since last tag
+      # ────────────────────────────────────────────────────────────────
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          # Find previous tag (if any)
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV" ]; then
+            RANGE="HEAD"
+            HEADER="## 🎉 Initial Release"
+          else
+            RANGE="${PREV}..HEAD"
+            HEADER="## 📋 Changes since ${PREV}"
+          fi
+
+          # Build the changelog text
+          {
+            echo "$HEADER"
+            echo ""
+            git log $RANGE --pretty=format:"- %s (%h)" --no-merges
+            echo ""
+            echo ""
+            echo "---"
+            echo "**Full diff:** https://github.com/${{ github.repository }}/compare/${PREV}...${{ steps.version.outputs.raw }}"
+          } > CHANGELOG_RELEASE.md
+
+          cat CHANGELOG_RELEASE.md
+
+      # ────────────────────────────────────────────────────────────────
+      # 10.  Create GitHub Release + upload both artifacts
+      # ────────────────────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ steps.version.outputs.raw }}
+          name:       "Textiva ${{ steps.version.outputs.ver }}"
+          body_path:  CHANGELOG_RELEASE.md
+          draft:      false
+          prerelease: false
+          files: |
+            dist/Textiva.exe
+            installer/output/Textiva-Setup-${{ steps.version.outputs.ver }}.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
