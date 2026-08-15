@@ -11,10 +11,12 @@ with open("version.txt") as f:
     VERSION = f.read().strip()
 
 a = Analysis(
-    ["main.py"],                        # entry point
+    ["main.py"],
     pathex=["."],
     binaries=[],
-    datas=[],                           # add extra files here if needed
+    datas=[
+        ("Textiva.ico", "."),      
+    ],
     hiddenimports=[
         "keyboard",
         "json",
@@ -22,13 +24,12 @@ a = Analysis(
         "tkinter",
         "tkinter.ttk",
         "tkinter.messagebox",
+        "winreg",                  
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # ── SAFE to exclude ────────────────────────────────────────────
-        # These are never touched by PyInstaller internals or your app
         "unittest",
         "pydoc",
         "doctest",
@@ -48,13 +49,6 @@ a = Analysis(
         "antigravity",
         "cgi",
         "cgitb",
-
-        # ── DO NOT exclude these ────────────────────────────────────────
-        # "urllib"   <- PyInstaller runtime hooks need this via zipfile/pathlib
-        # "email"    <- required by several stdlib modules internally
-        # "html"     <- required by http and others
-        # "http"     <- required internally
-        # "xml"      <- required internally by several hooks
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -78,7 +72,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,                      # no black console window
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

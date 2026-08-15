@@ -1,28 +1,34 @@
 """
-Simple Text Expander for Windows
----------------------------------
-SETUP:      pip install keyboard
-RUN:        python text_expander.py              ← opens GUI to manage triggers
-STARTUP:    python text_expander.py --install-startup   ← registers to run silently on login
-REMOVE:     python text_expander.py --uninstall-startup
+Textiva — Smart Text Expander for Windows
+------------------------------------------
+SETUP:  pip install keyboard
+RUN:    python main.py          ← opens GUI to manage triggers
 """
 
 import json
 import os
 import sys
 import time
-import argparse
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 import keyboard
+import winreg
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  PATHS & DEFAULTS
 # ──────────────────────────────────────────────────────────────────────────────
-TRIGGERS_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "triggers.json"
+
+APP_NAME = "Textiva"
+
+# Permanent data folder — survives restarts and PyInstaller re-extractions
+APP_DATA_DIR = os.path.join(
+    os.environ.get("APPDATA", os.path.expanduser("~")),
+    APP_NAME,
 )
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+
+TRIGGERS_FILE = os.path.join(APP_DATA_DIR, "triggers.json")
 
 DEFAULT_TRIGGERS = {
     "sp":  "Hey",
@@ -43,30 +49,126 @@ KEY_TO_CHAR = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  RESOURCE PATH  (finds bundled files inside PyInstaller exe)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def resource_path(relative: str) -> str:
+    """
+    Returns the correct path to a bundled resource file.
+    Works both during development and when running as a PyInstaller exe.
+    """
+    if getattr(sys, "frozen", False):
+        # PyInstaller extracts files to sys._MEIPASS at runtime
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  WINDOWS STARTUP  (registry — no VBS, no startup folder)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _get_exe_path() -> str:
+    """Returns the correct exe path for both frozen and script modes."""
+    if getattr(sys, "frozen", False):
+        return sys.executable
+    return os.path.abspath(sys.argv[0])
+
+
+def ensure_startup() -> None:
+    """
+    Silently adds Textiva to Windows startup via registry.
+    Never asks the user. Skipped if already registered correctly.
+    Never raises — failures are printed but do not crash the app.
+    """
+    try:
+        exe_path     = _get_exe_path()
+        wanted_value = f'"{exe_path}"'
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            _REG_KEY,
+            0,
+            winreg.KEY_READ | winreg.KEY_SET_VALUE,
+        )
+
+        # Check if already registered with the exact same path
+        try:
+            current, _ = winreg.QueryValueEx(key, APP_NAME)
+            if current == wanted_value:
+                winreg.CloseKey(key)
+                return          # already correct — nothing to do
+        except FileNotFoundError:
+            pass                # not registered yet — fall through to write
+
+        winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, wanted_value)
+        winreg.CloseKey(key)
+        print(f"[Startup] Registered: {exe_path}")
+
+    except OSError as exc:
+        print(f"[Startup] Could not register startup entry: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  LOAD / SAVE TRIGGERS
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_triggers() -> dict:
+    """
+    Loads triggers from %APPDATA%\\Textiva\\triggers.json.
+    Creates the file with defaults on first run.
+    Backs up and resets if the file is corrupted.
+    """
     if not os.path.exists(TRIGGERS_FILE):
-        with open(TRIGGERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_TRIGGERS, f, indent=2)
-    with open(TRIGGERS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        # First run — write defaults
+        _write_triggers(DEFAULT_TRIGGERS)
+        return dict(DEFAULT_TRIGGERS)
+
+    try:
+        with open(TRIGGERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+        raise ValueError("triggers.json root is not a dict")
+    except (json.JSONDecodeError, ValueError, OSError) as exc:
+        print(f"[Config] triggers.json corrupted ({exc}) — resetting")
+        _backup_triggers()
+        _write_triggers(DEFAULT_TRIGGERS)
+        return dict(DEFAULT_TRIGGERS)
 
 
 def save_triggers(data: dict) -> None:
+    """Saves triggers dict to %APPDATA%\\Textiva\\triggers.json."""
+    _write_triggers(data)
+
+
+def _write_triggers(data: dict) -> None:
     with open(TRIGGERS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _backup_triggers() -> None:
+    backup = TRIGGERS_FILE + ".backup"
+    try:
+        os.replace(TRIGGERS_FILE, backup)
+        print(f"[Config] Corrupted file backed up → {backup}")
+    except OSError:
+        pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  GLOBAL STATE
 # ──────────────────────────────────────────────────────────────────────────────
+
 triggers: dict = load_triggers()
 buffer:   str  = ""
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  EXPAND  
+#  EXPAND
 # ──────────────────────────────────────────────────────────────────────────────
 
 def expand(word: str, boundary_char: str) -> None:
@@ -87,7 +189,7 @@ def expand(word: str, boundary_char: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  KEYBOARD HOOK  
+#  KEYBOARD HOOK
 # ──────────────────────────────────────────────────────────────────────────────
 
 def on_key_event(event: keyboard.KeyboardEvent) -> None:
@@ -161,25 +263,21 @@ C = {
     "row_sel_fg":     "#c9c6ff",
 }
 
-FONT_TITLE  = ("Segoe UI", 17, "bold")
-FONT_ENTRY  = ("Segoe UI", 11)
-FONT_BTN    = ("Segoe UI", 10, "bold")
-FONT_MICRO  = ("Segoe UI",  8, "bold")
-FONT_SMALL  = ("Segoe UI",  9)
-FONT_TABLE  = ("Segoe UI", 10)
-FONT_TABLE_H= ("Segoe UI", 10, "bold")
+FONT_TITLE   = ("Segoe UI", 17, "bold")
+FONT_ENTRY   = ("Segoe UI", 11)
+FONT_BTN     = ("Segoe UI", 10, "bold")
+FONT_MICRO   = ("Segoe UI",  8, "bold")
+FONT_SMALL   = ("Segoe UI",  9)
+FONT_TABLE   = ("Segoe UI", 10)
+FONT_TABLE_H = ("Segoe UI", 10, "bold")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MODERN BUTTON  (Frame + Label — no Canvas, no Tcl naming issues)
+#  MODERN BUTTON
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ModernButton(tk.Frame):
-    """
-    Flat pill-style button built from a Frame + Label.
-    Uses a solid background colour with hover/press states.
-    No Canvas → no Tcl widget-name conflicts.
-    """
+    """Flat pill-style button built from a Frame + Label."""
 
     def __init__(
         self, parent,
@@ -232,13 +330,11 @@ class ModernButton(tk.Frame):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MODERN ENTRY  (Frame wrapper for dark fill + focus border)
+#  MODERN ENTRY
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ModernEntry(tk.Frame):
-    """
-    Entry with dark fill and a coloured highlight border on focus.
-    """
+    """Entry with dark fill and a coloured highlight border on focus."""
 
     def __init__(self, parent, textvariable=None, width=20, **kwargs):
         super().__init__(
@@ -273,15 +369,14 @@ class ModernEntry(tk.Frame):
     def _on_focus_out(self, _):
         self.config(highlightbackground=C["border"], highlightthickness=1)
 
-    # proxy so callers can treat this like a plain Entry
     def bind(self, seq=None, func=None, add=None):
         super().bind(seq, func, add)
         if hasattr(self, "entry"):
             self.entry.bind(seq, func, add)
 
-    def get(self):       return self._var.get()
-    def set(self, val):  self._var.set(val)
-    def focus(self):     self.entry.focus()
+    def get(self):      return self._var.get()
+    def set(self, val): self._var.set(val)
+    def focus(self):    self.entry.focus()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -291,10 +386,15 @@ class ModernEntry(tk.Frame):
 class ManagerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Text Expander")
+
+        # ── Window identity ───────────────────────────────────────────
+        self.root.title(APP_NAME)
         self.root.resizable(False, False)
         self.root.configure(bg=C["bg"])
         self.root.geometry("700x560")
+
+        # ── Window icon — replace default tkinter feather ─────────────
+        self._set_window_icon(self.root)
 
         self._style_treeview()
         self._build_header()
@@ -303,6 +403,36 @@ class ManagerGUI:
         self._build_status_bar()
 
         self.refresh_table()
+
+    # ── icon helper ────────────────────────────────────────────────────
+    def _set_window_icon(self, window: tk.BaseWidget) -> None:
+        """
+        Sets the Textiva icon on any tk.Tk or tk.Toplevel window.
+        Tries .ico first (Windows native), falls back to .png.
+        Silently ignores failures so the app always opens.
+        """
+        # --- try .ico (cleanest on Windows, works with iconbitmap) ----
+        ico = resource_path("Textiva.ico")
+        if os.path.exists(ico):
+            try:
+                window.iconbitmap(ico)
+                return
+            except Exception as exc:
+                print(f"[Icon] iconbitmap failed: {exc}")
+
+        # --- fallback: .png via PhotoImage ---------------------------
+        png = resource_path("Textiva_icon.png")
+        if os.path.exists(png):
+            try:
+                img = tk.PhotoImage(file=png)
+                window.iconphoto(True, img)
+                # keep a reference so GC doesn't delete it
+                window._icon_ref = img
+                return
+            except Exception as exc:
+                print(f"[Icon] iconphoto failed: {exc}")
+
+        print("[Icon] No icon file found — using default tkinter icon")
 
     # ── header ─────────────────────────────────────────────────────────
     def _build_header(self):
@@ -317,7 +447,7 @@ class ManagerGUI:
 
         tk.Label(
             inner,
-            text="⌨  Text Expander",
+            text="Textiva",
             font=FONT_TITLE,
             bg=C["surface"],
             fg=C["text_primary"],
@@ -344,7 +474,6 @@ class ManagerGUI:
         inner = tk.Frame(card, bg=C["surface"])
         inner.pack(fill="x", padx=20, pady=16)
 
-        # ── trigger label + entry ─────────────────────────────────────
         tk.Label(
             inner, text="TRIGGER WORD",
             font=FONT_MICRO, bg=C["surface"], fg=C["accent"],
@@ -359,13 +488,11 @@ class ManagerGUI:
             "<Return>", lambda e: self.replacement_entry.focus()
         )
 
-        # ── arrow ─────────────────────────────────────────────────────
         tk.Label(
             inner, text="→",
             font=("Segoe UI", 16), bg=C["surface"], fg=C["text_muted"],
         ).grid(row=0, column=1, rowspan=2, padx=10)
 
-        # ── replacement label + entry ─────────────────────────────────
         tk.Label(
             inner, text="EXPANDS TO",
             font=FONT_MICRO, bg=C["surface"], fg=C["accent"],
@@ -378,7 +505,6 @@ class ManagerGUI:
         self.replacement_entry.grid(row=1, column=2, padx=(0, 16), sticky="ew")
         self.replacement_entry.entry.bind("<Return>", lambda e: self.add_trigger())
 
-        # ── add button ────────────────────────────────────────────────
         add_btn = ModernButton(
             inner,
             text="＋  Add / Update",
@@ -401,7 +527,6 @@ class ManagerGUI:
         )
         card.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
-        # card sub-header
         sub_hdr = tk.Frame(card, bg=C["surface2"])
         sub_hdr.pack(fill="x")
         tk.Label(
@@ -409,7 +534,6 @@ class ManagerGUI:
             font=FONT_MICRO, bg=C["surface2"], fg=C["text_muted"], pady=7,
         ).pack(side="left")
 
-        # treeview
         tree_wrap = tk.Frame(card, bg=C["surface"])
         tree_wrap.pack(fill="both", expand=True, padx=12, pady=(8, 0))
 
@@ -436,7 +560,6 @@ class ManagerGUI:
         sb.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=sb.set)
 
-        # action row
         action_row = tk.Frame(card, bg=C["surface"])
         action_row.pack(fill="x", padx=12, pady=10)
 
@@ -455,7 +578,6 @@ class ManagerGUI:
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
 
-        # green "active" dot
         dot = tk.Canvas(
             bar, width=10, height=10,
             bg=C["surface2"], highlightthickness=0,
@@ -477,7 +599,16 @@ class ManagerGUI:
             fg=C["text_secondary"],
         ).pack(side="left", padx=(6, 0))
 
-    # ── treeview / scrollbar styles ────────────────────────────────────
+        # ── data dir label (so user knows where triggers.json lives) ──
+        tk.Label(
+            bar,
+            text=f"  Data: {APP_DATA_DIR}",
+            font=FONT_SMALL,
+            bg=C["surface2"],
+            fg=C["text_muted"],
+        ).pack(side="right", padx=(0, 12))
+
+    # ── treeview styles ────────────────────────────────────────────────
     def _style_treeview(self):
         style = ttk.Style()
         style.theme_use("default")
@@ -523,7 +654,7 @@ class ManagerGUI:
             background=[("active", C["border"])],
         )
 
-    # ── logic  ──────────────────────────────────────────────
+    # ── logic ──────────────────────────────────────────────────────────
     def refresh_table(self) -> None:
         for row in self.tree.get_children():
             self.tree.delete(row)
@@ -551,7 +682,9 @@ class ManagerGUI:
             messagebox.showwarning("Missing Input", "Please enter a trigger word.")
             return
         if not rt:
-            messagebox.showwarning("Missing Input", "Please enter the replacement text.")
+            messagebox.showwarning(
+                "Missing Input", "Please enter the replacement text."
+            )
             return
 
         action = "Updated" if tw in triggers else "Added"
@@ -566,7 +699,9 @@ class ManagerGUI:
         global triggers
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Nothing Selected", "Click a row in the table first.")
+            messagebox.showinfo(
+                "Nothing Selected", "Click a row in the table first."
+            )
             return
 
         tw = self.tree.item(sel[0], "values")[0]
@@ -585,61 +720,7 @@ class ManagerGUI:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  STARTUP HELPERS  
-# ──────────────────────────────────────────────────────────────────────────────
-
-STARTUP_FOLDER = os.path.join(
-    os.getenv("APPDATA", ""),
-    "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
-)
-LAUNCHER_NAME = "text_expander_launcher.vbs"
-
-
-def install_startup() -> None:
-    pythonw = sys.executable
-    candidate = pythonw.replace("python.exe", "pythonw.exe")
-    if os.path.exists(candidate):
-        pythonw = candidate
-
-    script_path = os.path.abspath(__file__)
-    vbs_lines = [
-        'Set WshShell = CreateObject("WScript.Shell")',
-        (
-            f'WshShell.Run Chr(34) & "{pythonw}" & Chr(34)'
-            f' & " " & Chr(34) & "{script_path}" & Chr(34)'
-            f' & " --no-gui", 0, False'
-        ),
-    ]
-    vbs_content = "\r\n".join(vbs_lines) + "\r\n"
-
-    os.makedirs(STARTUP_FOLDER, exist_ok=True)
-    launcher_path = os.path.join(STARTUP_FOLDER, LAUNCHER_NAME)
-    with open(launcher_path, "w", encoding="utf-8") as f:
-        f.write(vbs_content)
-
-    print(f"[ok] Installed to: {launcher_path}")
-    print("[ok] On every login it will run SILENTLY in the background.")
-
-    import subprocess
-    subprocess.Popen(
-        [pythonw, script_path, "--no-gui"],
-        creationflags=0x00000008,
-        close_fds=True,
-    )
-    print("[ok] Done. Text expander is active.")
-
-
-def uninstall_startup() -> None:
-    launcher_path = os.path.join(STARTUP_FOLDER, LAUNCHER_NAME)
-    if os.path.exists(launcher_path):
-        os.remove(launcher_path)
-        print(f"[ok] Removed: {launcher_path}")
-    else:
-        print("[info] Not found — already removed?")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  HOOK RUNNER  
+#  HOOK RUNNER
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_hook_only() -> None:
@@ -648,28 +729,17 @@ def run_hook_only() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  ENTRY POINT  
+#  ENTRY POINT
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Simple Windows text expander")
-    parser.add_argument("--install-startup",   action="store_true")
-    parser.add_argument("--uninstall-startup", action="store_true")
-    parser.add_argument("--no-gui",            action="store_true")
-    args = parser.parse_args()
+    # Always silently register Textiva at Windows startup via registry
+    ensure_startup()
 
-    if args.uninstall_startup:
-        uninstall_startup()
-        return
-    if args.install_startup:
-        install_startup()
-        return
-    if args.no_gui:
-        run_hook_only()
-        return
-
+    # Start keyboard hook in background thread
     threading.Thread(target=run_hook_only, daemon=True).start()
 
+    # Launch GUI
     root = tk.Tk()
     ManagerGUI(root)
     root.mainloop()
