@@ -1,0 +1,12 @@
+[project]
+name = "Textiva"
+version = "1.0.0"
+description = "A tiny text expander for Windows that turns shortcuts into full text"
+requires-python = ">=3.10"
+dependencies = [
+    "keyboard",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.backends.legacy:build"
